@@ -148,50 +148,15 @@
 
     function copyManifest() {
         if (!manifestUrlGlobal) return;
-        
-        // Check if clipboard API is available
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(manifestUrlGlobal)
-                .then(() => {
-                    copyBtn.textContent = 'Copied!';
-                    setTimeout(() => copyBtn.textContent = 'Copy Manifest URL', 1800);
-                })
-                .catch(err => {
-                    console.error('Failed to copy: ', err);
-                    fallbackCopy();
-                });
-        } else {
-            fallbackCopy();
-        }
-    }
-
-    function fallbackCopy() {
-        // Fallback method for older browsers or HTTP contexts
-        const textArea = document.createElement('textarea');
-        textArea.value = manifestUrlGlobal;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        
-        try {
-            const successful = document.execCommand('copy');
-            if (successful) {
+        navigator.clipboard.writeText(manifestUrlGlobal)
+            .then(() => {
                 copyBtn.textContent = 'Copied!';
                 setTimeout(() => copyBtn.textContent = 'Copy Manifest URL', 1800);
-            } else {
-                copyBtn.textContent = 'Copy failed';
+            })
+            .catch(() => {
+                copyBtn.textContent = 'Copy Failed';
                 setTimeout(() => copyBtn.textContent = 'Copy Manifest URL', 1800);
-            }
-        } catch (err) {
-            console.error('Fallback copy failed: ', err);
-            copyBtn.textContent = 'Copy failed';
-            setTimeout(() => copyBtn.textContent = 'Copy Manifest URL', 1800);
-        } finally {
-            document.body.removeChild(textArea);
-        }
+            });
     }
 
     copyBtn.addEventListener('click', copyManifest);
