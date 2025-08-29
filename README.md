@@ -68,29 +68,25 @@ You can run this addon in a Docker container for easy deployment and isolation.
 ### Build the Docker image
 
 ```bash
-docker build -t stremio-m3u-epg-addon .
+docker build -t iptv-addon .
 ```
 
 ### Run the container
 
 ```bash
-docker run -d \
-  --name stremio_addon \
-  -p 7000:7000 \
-  -v $(pwd)/.env:/app/.env:ro \
-  stremio-m3u-epg-addon
+docker run -d -p 443:443 --name iptv-addon iptv-addon
 ```
 
 This will:
-- Expose the addon on port 7000
+- Expose the addon on port 443
 - Use your local `.env` file for configuration
 - Run in detached mode
 
-You can now access the addon at `http://localhost:7000` (or your server's IP).
+You can now access the addon at `http://localhost:443` (or your server's IP).
 
 ---
 
-Visit: `http://localhost:7000`
+Visit: `http://localhost:443`
 
 ### 4. Configure & Install
 
@@ -235,7 +231,7 @@ Route format:
 | `CACHE_TTL_MS` | TTL for data & interface caches | `21600000` (6h) |
 | `MAX_CACHE_ENTRIES` | LRU capacity | `100` |
 | `REDIS_URL` | Enables Redis caching if set | (unset) |
-| `PORT` | HTTP port | `7000` |
+| `PORT` | HTTP port | `443` |
 
 ### Example `.env`
 
@@ -268,7 +264,7 @@ MAX_CACHE_ENTRIES=150
 #### `/encrypt` Usage Example
 
 ```bash
-curl -X POST http://localhost:7000/encrypt \
+curl -X POST http://localhost:443/encrypt \
   -H "Content-Type: application/json" \
   -d '{"m3uUrl":"https://example.com/playlist.m3u","enableEpg":true}'
 ```
@@ -279,7 +275,7 @@ Response:
 ```
 
 Then manifest URL:  
-`http://localhost:7000/enc:BASE64_IV_TAG_CIPHERTEXT/manifest.json`
+`http://localhost:443/enc:BASE64_IV_TAG_CIPHERTEXT/manifest.json`
 
 ---
 
@@ -293,11 +289,11 @@ Although no formal test suite is bundled beyond simple flows:
   ```
 - Inspect manifest:
   ```bash
-  curl http://localhost:7000/<token>/manifest.json | jq
+  curl http://localhost:443/<token>/manifest.json | jq
   ```
 - Catalog page sample:
   ```bash
-  curl http://localhost:7000/<token>/catalog/tv/iptv_channels.json | jq '.metas[0]'
+  curl http://localhost:443/<token>/catalog/tv/iptv_channels.json | jq '.metas[0]'
   ```
 
 ---
@@ -359,15 +355,15 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY . .
-ENV PORT=7000
-EXPOSE 7000
+ENV PORT=443
+EXPOSE 443
 CMD ["node","server.js"]
 ```
 
 Build & run:
 ```bash
 docker build -t stremio-iptv .
-docker run -e CONFIG_SECRET=$(openssl rand -hex 32) -p 7000:7000 stremio-iptv
+docker run -e CONFIG_SECRET=$(openssl rand -hex 32) -p 443:443 stremio-iptv
 ```
 
 ---

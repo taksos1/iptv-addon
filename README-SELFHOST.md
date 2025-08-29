@@ -19,7 +19,7 @@ docker-compose up -d
 docker build -t iptv-addon .
 
 # Run the container
-docker run -d -p 7000:7000 --name iptv-addon iptv-addon
+docker run -d -p 443:443 --name iptv-addon iptv-addon
 ```
 
 ## 🌐 Vercel Deployment
@@ -69,7 +69,7 @@ npm start
 
 ## 🛠️ Configuration
 
-Access the configuration UI at: `http://localhost:7000/configure`
+Access the configuration UI at: `http://localhost:443/configure`
 
 ### Supported IPTV Formats
 - ✅ **Xtream Codes API** (JSON format)

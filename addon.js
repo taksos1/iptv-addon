@@ -5,9 +5,13 @@ const crypto = require('crypto');
 const ADDON_ID = 'org.stremio.iptv.selfhosted';
 const ADDON_NAME = 'IPTV Self-Hosted';
 
-// Simple in-memory cache to reduce IPTV server load
+// Enhanced multi-layer cache to reduce IPTV server load
 const cache = new Map();
+const metaCache = new Map();
+const streamCache = new Map();
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const META_CACHE_TTL = 60 * 60 * 1000; // 1 hour for metadata
+const STREAM_CACHE_TTL = 5 * 60 * 1000; // 5 minutes for streams
 
 class IPTVAddon {
     constructor(config) {
@@ -23,26 +27,48 @@ class IPTVAddon {
     }
 
     async init() {
+        console.log('[ADDON] Initializing with config:', this.config ? 'present' : 'null');
+        if (!this.config) {
+            console.log('[ADDON] No config provided, using empty addon');
+            return;
+        }
+        
         if (this.config.xtreamUrl && this.config.xtreamUsername && this.config.xtreamPassword) {
+            console.log('[ADDON] Loading Xtream data from:', this.config.xtreamUrl);
             await this.loadXtreamData();
+        } else {
+            console.log('[ADDON] Missing Xtream credentials:', {
+                url: !!this.config.xtreamUrl,
+                username: !!this.config.xtreamUsername,
+                password: !!this.config.xtreamPassword
+            });
         }
     }
 
-    getCachedData(key) {
-        const cached = cache.get(key);
-        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    getCachedData(key, cacheType = 'default') {
+        const targetCache = cacheType === 'meta' ? metaCache : 
+                           cacheType === 'stream' ? streamCache : cache;
+        const ttl = cacheType === 'meta' ? META_CACHE_TTL : 
+                   cacheType === 'stream' ? STREAM_CACHE_TTL : CACHE_TTL;
+        
+        const cached = targetCache.get(key);
+        if (cached && Date.now() - cached.timestamp < ttl) {
             return cached.data;
         }
-        cache.delete(key);
+        targetCache.delete(key);
         return null;
     }
 
-    setCachedData(key, data) {
-        cache.set(key, { data, timestamp: Date.now() });
+    setCachedData(key, data, cacheType = 'default') {
+        const targetCache = cacheType === 'meta' ? metaCache : 
+                           cacheType === 'stream' ? streamCache : cache;
+        const maxSize = cacheType === 'stream' ? 50 : 100;
+        
+        targetCache.set(key, { data, timestamp: Date.now() });
         // Clean old cache entries
-        if (cache.size > 100) {
-            const oldestKey = cache.keys().next().value;
-            cache.delete(oldestKey);
+        if (targetCache.size > maxSize) {
+            const oldestKey = targetCache.keys().next().value;
+            targetCache.delete(oldestKey);
         }
     }
 
@@ -405,13 +431,33 @@ class IPTVAddon {
             items = items.filter(item => item.category === genre);
         }
 
-        // Filter by search
+        // Enhanced search with fuzzy matching and relevance scoring
         if (search) {
             const searchLower = search.toLowerCase();
-            items = items.filter(item => 
-                item.name.toLowerCase().includes(searchLower) ||
-                item.category.toLowerCase().includes(searchLower)
-            );
+            const searchTerms = searchLower.split(' ').filter(term => term.length > 1);
+            
+            items = items.map(item => {
+                const name = item.name.toLowerCase();
+                const category = item.category.toLowerCase();
+                let score = 0;
+                
+                // Exact name match gets highest score
+                if (name === searchLower) score += 100;
+                // Name starts with search gets high score
+                else if (name.startsWith(searchLower)) score += 50;
+                // Name contains search gets medium score
+                else if (name.includes(searchLower)) score += 25;
+                
+                // Multi-term search scoring
+                searchTerms.forEach(term => {
+                    if (name.includes(term)) score += 10;
+                    if (category.includes(term)) score += 5;
+                });
+                
+                return { ...item, searchScore: score };
+            })
+            .filter(item => item.searchScore > 0)
+            .sort((a, b) => b.searchScore - a.searchScore);
         }
 
         // Sort by category then name
@@ -451,29 +497,40 @@ class IPTVAddon {
     }
 
     async getEpisodeStream(seriesId, season, episode) {
+        const streamKey = `stream_${seriesId}_${season}_${episode}`;
+        const cached = this.getCachedData(streamKey, 'stream');
+        if (cached) {
+            console.log(`[STREAM] Using cached episode stream for ${seriesId}:${season}:${episode}`);
+            return cached;
+        }
+
+        const { xtreamUrl, xtreamUsername, xtreamPassword } = this.config;
+        
         try {
-            const actualSeriesId = seriesId.replace('series_', '');
-            const episodeUrl = `${this.config.xtreamUrl}/player_api.php?username=${this.config.xtreamUsername}&password=${this.config.xtreamPassword}&action=get_series_info&series_id=${actualSeriesId}`;
+            const seriesInfoUrl = `${xtreamUrl}/player_api.php?username=${encodeURIComponent(xtreamUsername)}&password=${encodeURIComponent(xtreamPassword)}&action=get_series_info&series_id=${seriesId}`;
+            const response = await fetch(seriesInfoUrl, { timeout: 10000 });
             
-            const response = await fetch(episodeUrl, { timeout: 10000 });
-            const seriesInfo = await response.json();
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
             
-            if (seriesInfo && seriesInfo.episodes && seriesInfo.episodes[season]) {
-                const episodeData = seriesInfo.episodes[season].find(ep => ep.episode_num == episode);
-                if (episodeData) {
-                    // Use the actual stream URL from the episode data
-                    return `${this.config.xtreamUrl}/series/${this.config.xtreamUsername}/${this.config.xtreamPassword}/${episodeData.id}.${episodeData.container_extension || 'mp4'}`;
-                }
+            const data = await response.json();
+            
+            if (data.episodes && data.episodes[season] && data.episodes[season][episode - 1]) {
+                const episodeData = data.episodes[season][episode - 1];
+                const container = episodeData.container_extension || 'mp4';
+                const streamUrl = `${xtreamUrl}/series/${xtreamUsername}/${xtreamPassword}/${episodeData.id}.${container}`;
+                
+                // Cache the stream URL
+                this.setCachedData(streamKey, streamUrl, 'stream');
+                return streamUrl;
             }
-            
-            // Fallback to constructed URL
-            return `${this.config.xtreamUrl}/series/${this.config.xtreamUsername}/${this.config.xtreamPassword}/${actualSeriesId}/${season}/${episode}.mp4`;
         } catch (error) {
             console.error(`[STREAM] Error fetching episode stream:`, error.message);
-            // Fallback URL
-            const actualSeriesId = seriesId.replace('series_', '');
-            return `${this.config.xtreamUrl}/series/${this.config.xtreamUsername}/${this.config.xtreamPassword}/${actualSeriesId}/${season}/${episode}.mp4`;
         }
+        
+        // Fallback URL
+        const fallbackUrl = `${xtreamUrl}/series/${xtreamUsername}/${xtreamPassword}/${seriesId}:${season}:${episode}.mp4`;
+        this.setCachedData(streamKey, fallbackUrl, 'stream');
+        return fallbackUrl;
     }
 
     getStream(id) {
@@ -507,6 +564,7 @@ class IPTVAddon {
 }
 
 module.exports = async function createAddon(config = {}) {
+    console.log('[CREATE_ADDON] Received config:', config ? Object.keys(config) : 'null');
     const addon = new IPTVAddon(config);
     await addon.init();
 
@@ -524,7 +582,7 @@ module.exports = async function createAddon(config = {}) {
                 id: 'iptv_live',
                 name: 'IPTV',
                 extra: [
-                    { name: 'genre', options: ['All Channels', ...addon.categories.live.slice(0, 20)] },
+                    { name: 'genre', options: ['All Channels', ...addon.categories.live.slice(0, 25)] },
                     { name: 'search' },
                     { name: 'skip' }
                 ]
@@ -534,7 +592,7 @@ module.exports = async function createAddon(config = {}) {
                 id: 'iptv_movies',
                 name: 'Movies',
                 extra: [
-                    { name: 'genre', options: ['All Movies', ...addon.categories.movies.slice(0, 15)] },
+                    { name: 'genre', options: ['All Movies', ...addon.categories.movies.slice(0, 20)] },
                     { name: 'search' },
                     { name: 'skip' }
                 ]
@@ -544,7 +602,7 @@ module.exports = async function createAddon(config = {}) {
                 id: 'iptv_series',
                 name: 'Series',
                 extra: [
-                    { name: 'genre', options: ['All Series', ...addon.categories.series.slice(0, 10)] },
+                    { name: 'genre', options: ['All Series', ...addon.categories.series.slice(0, 15)] },
                     { name: 'search' },
                     { name: 'skip' }
                 ]
